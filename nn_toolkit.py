@@ -80,6 +80,7 @@ def merge_shuffle_split(images_array_1, labels_array_1, images_array_2, labels_a
         test_set_x_orig: Same as train_set_x_orig for the validation / test set array.
         test_set_y: The labels of test_set_x_orig.
     '''
+    np.random.seed(seed)
     # Merging the images and labels arrays (merge)
     images_array = np.concatenate((images_array_1, images_array_2), axis = 0)
     labels_array = np.concatenate((labels_array_1, labels_array_2), axis = 1)
@@ -250,9 +251,9 @@ def predict_sample(sample_path, w, b):
 
 # 13 ________________________________________________________________________________________________________________________________________________________________
 
-def deep_nn_model(X, Y, X_test, Y_test, layer_structure = [4, 3, 1], iterations = 10, alpha = 0.01,
-                  lambd = 0, dropout_layers = [], keep_prob = 1,
-                  print_cost = True, print_every = 500, show_plots = True):
+def deep_nn_model(X, Y, X_test, Y_test, mini_batch_size = 128, layer_structure = [5, 3, 1], iterations = 1000, alpha = 0.001,
+                  lambd = 0, dropout_layers = [], keep_prob = 1, beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8,
+                  print_cost = True, print_every = 500, show_plots = True, seed = 0):
     '''
     An 'L' deep neural network model with regularization parameters for L2 and Dropout.
     
@@ -274,6 +275,7 @@ def deep_nn_model(X, Y, X_test, Y_test, layer_structure = [4, 3, 1], iterations 
     Returns:
         model_summary: A dictionary with varoius model information.
     '''
+    np.random.seed(seed)
     start = datetime.now() # to measure training time (start).
     model_structure = layer_structure.copy() # to include the inpout layer of shape (X.shape[0], number of images / examples).
     model_structure.insert(0, X.shape[0]) # including the input layer and its dimensions.
@@ -282,77 +284,146 @@ def deep_nn_model(X, Y, X_test, Y_test, layer_structure = [4, 3, 1], iterations 
     
     ## Initialize the parameters:
     P = dict() # parameters dictionary
+    V = dict() # momentum parameters dictionary, used to store the exponentially moving averages of the gradients. 
+    S = dict() # RMSProp parameters dictionary, used to store the exponentially moving averages of the squared gradients.
     
     for l in range(1, num_layers): # for every hidden layer in the model, create the set of parameters below.
         P['W' + str(l)] = np.random.randn(model_structure[l], model_structure[l - 1]) * np.sqrt(2 / model_structure[l - 1]) # random initialization with 'He' scaling.
         P['b' + str(l)] = np.zeros((model_structure[l], 1)) # zero inialization.
         
+        V['dW' + str(l)] = np.zeros((P['W' + str(l)].shape)) # initializing momentum variables for the wieghtes.
+        V['db' + str(l)] = np.zeros((P['b' + str(l)].shape)) # initializing momentum variables for the baises.
+        
+        S['dW' + str(l)] = np.zeros((P['W' + str(l)].shape)) # initializing RMSProp variables for the wieghtes.
+        S['db' + str(l)] = np.zeros((P['b' + str(l)].shape)) # initializing RMSProp variables for the baises.
+                
     # Dictionaries to run and save the forward and backward propagation results:
     Z = dict() # linear forward pass.
     A = dict() # forward activation.
     D = dict() # dropout mask.
     dZ = dict() # linear backward pass.
+    dP = dict() # parameters gradients.
     dA = dict() # backward activation.
-    dP = dict() # parameters gradiants.
-    
-    A['A0'] = X # to intialize the forward pass.
-    m = Y.shape[1] # number of traning examples.
+        
     costs = list() # to save cost values per iteration.
     
     ## Forward Propagation:
+    X_train = X
+    Y_train = Y
+    adam_counter = 1
     for i in range(iterations): # over each iteration.
-        for l in range(1, num_layers): # for every layer in the model>
-#             if 0 in dropout_layers: # adding a dropout mask to the input layer.
-#                 D['D' + str(0)] = np.random.rand(A['A' + str(0)].shape[0], A['A' + str(0)].shape[1]) # generating mask D0.
-#                 D['D' + str(0)] = (D['D' + str(0)] < keep_prob).astype('int') # setting valuse to 0s and 1s based on keep_prob as a threshold.
-#                 A['A' + str(0)] *= D['D' + str(0)] / keep_prob # applying mask and scaling back A0 to maintain expected value (inverted dropout).
-            Z['Z' + str(l)] = np.dot(P['W' + str(l)], A['A' + str(l - 1)]) + P['b' + str(l)] # linear forward pass.
-            if l < L: # if this is not the last hidden layer in the model then:
-                A['A' + str(l)] = np.maximum(0, Z['Z' + str(l)]) # calculate the activation as a RelU function.
-                if (len(dropout_layers) != 0) and (keep_prob < 1.0) and (l in dropout_layers):
-                    D['D' + str(l)] = np.random.rand(A['A' + str(l)].shape[0], A['A' + str(l)].shape[1])
-                    D['D' + str(l)] = (D['D' + str(l)] < keep_prob).astype('int')
-                    A['A' + str(l)] *= D['D' + str(l)] / keep_prob
-            else:
-                A['A' + str(l)] = 1 / (1 + np.exp(-(Z['Z' + str(l)]))) # else if it's the last hidden layer, then calculate the activation as a 
-                                                                       # sigmoid fucntion (since the task is binary classification).
+        X = X_train
+        Y = Y_train
+        ## Mini-Batches:
+        m = Y.shape[1] # number of traning examples.
+        
+        indices = np.arange(m) # creating indices to shuffle X and Y for mini-batch creation.
+        seed += 1 # to update the seed in order to get a different shuffle each iteration.
+        np.random.shuffle(indices)
+        X = X[:, indices] # shuffling X.
+        Y = Y[:, indices].reshape((1, m)) # shuffling Y, reshaping added to make sure Y shape is maintained.
+        
+        num_full_mini_batches = int(m / mini_batch_size) # number of full (of size mini_batch_size) mini mini-batches.
+        left_over_exampels = ((m / mini_batch_size) - num_full_mini_batches) * mini_batch_size # number of examples in the last mini-batch (less than mini_batch_size).
+        mini_batches_list = list() # list to keep mini-batches for use in the training.
+        
+        for j in range(num_full_mini_batches): # creating the full mini-batches.
+            mini_batch_X = X[:, j * mini_batch_size: (1 + j) * mini_batch_size]
+            mini_batch_Y = Y[:, j * mini_batch_size: (1 + j) * mini_batch_size]
+            mini_batch = (mini_batch_X, mini_batch_Y)
+            mini_batches_list.append(mini_batch)
+            
+        if m % mini_batch_size != 0: # creating the last mini-batch, if any.
+            batched_examples = int(m - left_over_exampels)
+            mini_batch_X = X[:, batched_examples: m]
+            mini_batch_Y = Y[:, batched_examples: m]
+            mini_batch = (mini_batch_X, mini_batch_Y)
+            mini_batches_list.append(mini_batch)
+        
+        for mini_batch in mini_batches_list: # looping over mini-batches.
+            X, Y = mini_batch # unpack first mini-batch into X and Y.
+            A['A0'] = X # to intialize the forward pass.
+            
+            mini_batch_m = Y.shape[1]
+            for l in range(1, num_layers): # for every layer in the model>
+    #             if 0 in dropout_layers: # adding a dropout mask to the input layer.
+    #                 D['D' + str(0)] = np.random.rand(A['A' + str(0)].shape[0], A['A' + str(0)].shape[1]) # generating mask D0.
+    #                 D['D' + str(0)] = (D['D' + str(0)] < keep_prob).astype('int') # setting valuse to 0s and 1s based on keep_prob as a threshold.
+    #                 A['A' + str(0)] *= D['D' + str(0)] / keep_prob # applying mask and scaling back A0 to maintain expected value (inverted dropout).
+    
+                Z['Z' + str(l)] = np.dot(P['W' + str(l)], A['A' + str(l - 1)]) + P['b' + str(l)] # linear forward pass.
+        
+                if l < L: # if this is not the last hidden layer in the model then:
+                    A['A' + str(l)] = np.maximum(0, Z['Z' + str(l)]) # calculate the activation as a RelU function.
                     
-        cross_entropy_cost = - np.sum(np.add(np.dot(Y, np.log(A['A' + str(L)].T)), np.dot(1 - Y, np.log(1 - A['A' + str(L)].T)))) / m # calculates the cross entropy (first part of the cost).
-        L2_regularization_cost = 0 # initialize the L2 regularization term.
-        for l in range(1, num_layers): # to be applied on each of the W parameters.
-            L2_regularization_cost += np.sum(np.square(P['W' + str(l)])) # calculating L2 regularization term (first part).
-        L2_regularization_cost = L2_regularization_cost * lambd / (2 * m) # scaling regularization term by lambda over two m (second part).
-        cost = cross_entropy_cost + L2_regularization_cost # calculating cost by adding L2 regularization term to the first part of cost (second part of the cost).
-        cost = np.squeeze(cost) # insure it's not a rank one array.
-        assert(cost.shape == ()) # raise error if it is not a scalar.
-        costs.append(cost) # append it to the costs list.
-        
-        Yhat_train = A['A' + str(L)] # final output (Yhat).
-        Yhat_train = np.array((Yhat_train > 0.5) * 1).reshape(1, m) # converting to 0s and 1s based on 0.5 threshold.
-        train_acc = (100 - np.mean(np.abs(Yhat_train - Y)) * 100).round(4) # calculate accuracy using the final output.
-        
+                    if (len(dropout_layers) != 0) and (keep_prob < 1.0) and (l in dropout_layers):
+                        D['D' + str(l)] = np.random.rand(A['A' + str(l)].shape[0], A['A' + str(l)].shape[1])
+                        D['D' + str(l)] = (D['D' + str(l)] < keep_prob).astype('int')
+                        A['A' + str(l)] *= D['D' + str(l)] / keep_prob
+                else:
+                    A['A' + str(l)] = 1 / (1 + np.exp(-(Z['Z' + str(l)]))) # else if it's the last hidden layer, then calculate the activation as a 
+                                                                           # sigmoid fucntion (since the task is binary classification).
+
+            cross_entropy_cost = - np.sum(np.add(np.dot(Y, np.log(A['A' + str(L)].T)), np.dot(1 - Y, np.log(1 - A['A' + str(L)].T)))) / mini_batch_m # calculates the cross entropy (first part of the cost).
+            L2_regularization_cost = 0 # initialize the L2 regularization term.
+            
+            for l in range(1, num_layers): # to be applied on each of the W parameters.
+                L2_regularization_cost += np.sum(np.square(P['W' + str(l)])) # calculating L2 regularization term (first part).
+                
+            L2_regularization_cost = L2_regularization_cost * lambd / (2 * mini_batch_m) # scaling regularization term by lambda over two m (second part).
+            cost = cross_entropy_cost + L2_regularization_cost # calculating cost by adding L2 regularization term to the first part of cost (second part of the cost).
+            cost = np.squeeze(cost) # insure it's not a rank one array.
+            assert(cost.shape == ()) # raise error if it is not a scalar.
+            costs.append(cost) # append it to the costs list.
+            
+            Yhat_train = A['A' + str(L)] # final output (Yhat).
+            Yhat_train = np.array((Yhat_train > 0.5) * 1).reshape(1, mini_batch_m) # converting to 0s and 1s based on 0.5 threshold.
+            train_acc = (100 - np.mean(np.abs(Yhat_train - Y)) * 100).round(4) # calculate accuracy using the final output.
+                            
+        ## Backward Propagation:   
+            dA['dA' + str(L)] = - (np.divide(Y, A['A' + str(L)]) - np.divide(1 - Y, 1 - A['A' + str(L)])) # initializing backward propagation.
+            dZ['dZ' + str(L)] = dA['dA' + str(L)] * A['A' + str(L)] * (1 - A['A' + str(L)]) # sigmoid activation backwared
+            
+            for l in reversed(range(1, num_layers)): # for every layer in the model, going last to first, calculate:
+                dP['dW' + str(l)] = np.dot(dZ['dZ' + str(l)], A['A' + str(l - 1)].T) / mini_batch_m + (P['W' + str(l)] * lambd / mini_batch_m)# Ws gradients with regularization.
+                dP['db' + str(l)] = np.sum(dZ['dZ' + str(l)], axis = 1, keepdims = True) / mini_batch_m # bs gradients.
+                
+                if l > 1: # As long as this is not the first layer, then calcualte:
+                    dA['dA' + str(l - 1)] = np.dot(P['W' + str(l)].T, dZ['dZ' + str(l)]) # Relu activations gradients.
+                    
+                    if (len(dropout_layers) != 0) and (keep_prob < 1.0) and (l - 1 in dropout_layers):
+                        dA['dA' + str(l - 1)] *= D['D' + str(l - 1)] / keep_prob # scaling back the activation gradients to maintaine the expected value 
+                                                                                # of the hidden layers' output (Inverted Dropout).
+                    dZ['dZ' + str(l - 1)] = np.array(dA['dA' + str(l - 1)], copy=True) # to calculate dZ_l-1.
+                    dZ['dZ' + str(l - 1)][Z['Z' + str(l - 1)] <= 0] = 0 # the gradient of the linear activation at dZ_l-1.
+                    
+            Vc = dict() # corrected momentum parameters dictionary, used to store the exponentially moving averages of the gradients. 
+            Sc = dict() # corrected RMSProp parameters dictionary, used to store the exponentially moving averages of the squared gradients.
+        ## Updating the parameters:    
+            for l in range(1, num_layers): # for every hidden layer in the model:
+                V['dW' + str(l)] = beta1 * V['dW' + str(l)] + (1 - beta1) * dP['dW' + str(l)]
+                V['db' + str(l)] = beta1 * V['db' + str(l)] + (1 - beta1) * dP['db' + str(l)]
+                
+                Vc['dW' + str(l)] = V['dW' + str(l)] / (1 - np.power(beta1, adam_counter))
+                Vc['db' + str(l)] = V['db' + str(l)] / (1 - np.power(beta1, adam_counter))
+                
+                S['dW' + str(l)] = beta2 * S['dW' + str(l)] + (1 - beta2) * np.power(dP['dW' + str(l)], 2)
+                S['db' + str(l)] = beta2 * S['db' + str(l)] + (1 - beta2) * np.power(dP['db' + str(l)], 2)
+                
+                Sc['dW' + str(l)] = S['dW' + str(l)] / (1 - np.power(beta2, adam_counter))
+                Sc['db' + str(l)] = S['db' + str(l)] / (1 - np.power(beta2, adam_counter))
+                
+                P['W' + str(l)] = P['W' + str(l)] - alpha * (Vc['dW' + str(l)] / np.sqrt(Sc['dW' + str(l)] + epsilon)) # update Ws.
+                P['b' + str(l)] = P['b' + str(l)] - alpha * (Vc['db' + str(l)] / np.sqrt(Sc['db' + str(l)] + epsilon)) # update bs.
+                                
+#                 P['W' + str(l)] -= alpha * dP['dW' + str(l)] # update Ws. Uncomment to discard the use of Adam Optimizer.
+#                 P['b' + str(l)] -= alpha * dP['db' + str(l)] # update bs. Uncomment to discard the use of Adam Optimizer.
+                
+            adam_counter += 1 # used with the values of V & S to correct them and produce Vc & Sc.
+            
         if print_cost and i % print_every == 0: # to print the cost and training accuracy if set to Ture, every number of iterations based on 'print_every' argument.
-            print('Iteration {} : Cost: {}, Train Acc.: {}%'.format(i, cost.round(4), train_acc.round(4))) # round the cost and accuracy and print them.
-    
-    ## Backward Propagation:   
-        dA['dA' + str(L)] = - (np.divide(Y, A['A' + str(L)]) - np.divide(1 - Y, 1 - A['A' + str(L)])) # initializing backward propagation.
-        dZ['dZ' + str(L)] = dA['dA' + str(L)] * A['A' + str(L)] * (1 - A['A' + str(L)]) # sigmoid activation backwared
-        
-        for l in reversed(range(1, num_layers)): # for every layer in the model, going last to first, calculate:
-            dP['dW' + str(l)] = np.dot(dZ['dZ' + str(l)], A['A' + str(l - 1)].T) / m + (P['W' + str(l)] * lambd / m)# Ws gradiants with regularization.
-            dP['db' + str(l)] = np.sum(dZ['dZ' + str(l)], axis = 1, keepdims = True) / m # bs gradiants.
-            if l > 1: # As long as this is not the first layer, then calcualte:
-                dA['dA' + str(l - 1)] = np.dot(P['W' + str(l)].T, dZ['dZ' + str(l)]) # Relu activations gradiants.
-                if (len(dropout_layers) != 0) and (keep_prob < 1.0) and (l - 1 in dropout_layers):
-                    dA['dA' + str(l - 1)] *= D['D' + str(l - 1)] / keep_prob # scaling back the activation gradiants to maintaine the expected value of the hidden layers' output (Inverted Dropout).
-                dZ['dZ' + str(l - 1)] = np.array(dA['dA' + str(l - 1)], copy=True) # to calculate dZ_l-1.
-                dZ['dZ' + str(l - 1)][Z['Z' + str(l - 1)] <= 0] = 0 # the gradiant of the linear activation at dZ_l-1.
-    
-    ## Updating the parameters:    
-        for l in range(1, num_layers): # for every hidden layer in the model:
-            P['W' + str(l)] -= alpha * dP['dW' + str(l)] # update Ws.
-            P['b' + str(l)] -= alpha * dP['db' + str(l)] # update bs.
-    
+            print('Iteration {} : Cost: {}, Train Acc.: {}%'.format(i, cost.round(6), train_acc.round(4))) # round the cost and accuracy and print them.
+            
     end = datetime.now() # to measure training time (end).
     
     ## Predictions on test set:
@@ -377,20 +448,24 @@ def deep_nn_model(X, Y, X_test, Y_test, layer_structure = [4, 3, 1], iterations 
     print('Test Accuracy: {}%'.format(test_acc)) # printing test accuracy.
     
     if show_plots: # if 'show_plots' argument is set to True, show the costs plots:
-        plt.plot(np.squeeze(costs)) # ploting the costs over iterations.
+        sub_costs = [costs[i] for i in range(len(costs)) if i % len(mini_batches_list) == 0] # list of costs resulting from full iterations.
+        plt.plot(np.squeeze(sub_costs)) # plot costs resulting from full iterations.
+#         plt.plot(np.squeeze(costs)) # ploting the costs over iterations.
         plt.ylabel('cost') # labeling the y axis.
         plt.xlabel('iterations') # labeling the x axis.
+        #plt.xticks(np.arange(0, len(costs), step = iterations / 100))
         plt.title('model struc.: ' + str(model_structure) + '.' + ' alpha = ' + str(alpha)) # title of the plot showing the learning rate and model structure.
         plt.show() # to show the plot.
     
     ## Model Summary
     model_summary = {'Model No.': str(datetime.now()), 'Model Structure': tuple(model_structure),
-                     'Training Minutes': str(end - start),
+                     'Training Time': str(end - start),
                      'Number of Parameters': len(P), 'Train X Shape': np.shape(X), 'Train Y Sahpe': np.shape(Y),
                      'Test X Shape': np.shape(X_test), 'Test Y Sahpe': np.shape(Y_test),
                      'Iterations': iterations, 'alpha': alpha,
                      'P': P, 'Costs': costs, 'Train Accuracy': train_acc, 'Test Accuracy': test_acc, 'Dropout Masks': D,
-                     'Regularization Lambd': lambd, 'Keep Prob.': keep_prob, 'Dropout Layers': tuple(sorted(dropout_layers))}
+                     'Regularization Lambd': lambd, 'Keep Prob.': keep_prob, 'Dropout Layers': tuple(sorted(dropout_layers)),
+                     'Mini Batch Size': mini_batch_size, 'beta1': beta1, 'beta2': beta2, 'epsilon': epsilon}
     
     return model_summary # the dictionary with model summary information returned.
 
@@ -425,8 +500,9 @@ def deep_nn_model_predict(sample_path = None, resize = 100, model = None):
     
     plt.figure(figsize = (15, 12))
     i = 1
-    plt.subplot(10, 6, i)
-    for j in range(len(listdir(sample_path))):
+    num_pics = len(listdir(sample_path))
+    plt.subplot(num_pics, 6, i)
+    for j in range(num_pics):
         pic = Image.open(sample_path + listdir(sample_path)[j])
         plt.subplot(5, 6, i + j)
         if Yhat[:, j] == 1:
@@ -459,10 +535,10 @@ def random_image_check(num_images, set_x, set_y):
     
 # 16 ________________________________________________________________________________________________________________________________________________________________
 
-def deep_nn_model_exp(train_set_x, train_set_y, test_set_x, test_set_y,
+def deep_nn_model_exp(train_set_x, train_set_y, test_set_x, test_set_y, mini_batch_size = 128,
                       layer_structures = [[1]], epochs_range = (1000, 3000), epochs_sets = 1, alpha_range = (0.001, 0.005), alpha_sets = 1,
-                      lambd = 0.0, dropout_layers = [], keep_prob = 1.0,
-                      print_cost = True, print_every = 500, show_plots = True):
+                      lambd = 0.0, dropout_layers = [], keep_prob = 1.0, beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8,
+                      print_cost = True, print_every = 500, show_plots = True, seed = 0):
     '''
     The function performs iterative application of the 'deep_nn_model' funciton over the number of given epochs, for every given structure, for every given alpha
     and returns a list of the resulted models where each contains full information about the model parameters and hayperparameters...etc. For full details on the
@@ -495,15 +571,15 @@ def deep_nn_model_exp(train_set_x, train_set_y, test_set_x, test_set_y,
 
     models_list = list()
     count = 1
-    np.random.seed(seed = 666)
+    np.random.seed(seed)
     for iteration in num_iterations_list:
         for alpha in learning_rates_list:
             for structure in layer_structures:
                 print(count, 'of', len(num_iterations_list) * len(learning_rates_list) * len(layer_structures), '-' * 50, datetime.now())
-                model = deep_nn_model(train_set_x, train_set_y, test_set_x, test_set_y,
+                model = deep_nn_model(train_set_x, train_set_y, test_set_x, test_set_y, mini_batch_size = mini_batch_size,
                                       layer_structure = structure, iterations = int(iteration), alpha = alpha.round(6),
-                                      lambd = lambd, dropout_layers = dropout_layers, keep_prob = keep_prob,
-                                      print_cost = print_cost, print_every = print_every, show_plots = show_plots)
+                                      lambd = lambd, dropout_layers = dropout_layers, keep_prob = keep_prob, beta1 = beta1, beta2 = beta2, epsilon = epsilon, 
+                                      print_cost = print_cost, print_every = print_every, show_plots = show_plots, seed = seed)
                 
                 models_list.append(model)
                 count += 1
