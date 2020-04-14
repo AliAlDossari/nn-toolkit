@@ -3,6 +3,8 @@ A Deep learning tool kit with a Neural Network model implementation, in addition
 '''
 # Importing necessary libraries:
 import numpy as np
+import tensorflow as tf
+from tensorflow.python.framework import ops
 from matplotlib import pyplot as plt
 from matplotlib import image
 from PIL import Image
@@ -314,32 +316,9 @@ def deep_nn_model(X, Y, X_test, Y_test, mini_batch_size = 128, layer_structure =
     for i in range(iterations): # over each iteration.
         X = X_train
         Y = Y_train
-        ## Mini-Batches:
-        m = Y.shape[1] # number of traning examples.
         
-        indices = np.arange(m) # creating indices to shuffle X and Y for mini-batch creation.
-        seed += 1 # to update the seed in order to get a different shuffle each iteration.
-        np.random.shuffle(indices)
-        X = X[:, indices] # shuffling X.
-        Y = Y[:, indices].reshape((1, m)) # shuffling Y, reshaping added to make sure Y shape is maintained.
-        
-        num_full_mini_batches = int(m / mini_batch_size) # number of full (of size mini_batch_size) mini mini-batches.
-        left_over_exampels = ((m / mini_batch_size) - num_full_mini_batches) * mini_batch_size # number of examples in the last mini-batch (less than mini_batch_size).
-        mini_batches_list = list() # list to keep mini-batches for use in the training.
-        
-        for j in range(num_full_mini_batches): # creating the full mini-batches.
-            mini_batch_X = X[:, j * mini_batch_size: (1 + j) * mini_batch_size]
-            mini_batch_Y = Y[:, j * mini_batch_size: (1 + j) * mini_batch_size]
-            mini_batch = (mini_batch_X, mini_batch_Y)
-            mini_batches_list.append(mini_batch)
-            
-        if m % mini_batch_size != 0: # creating the last mini-batch, if any.
-            batched_examples = int(m - left_over_exampels)
-            mini_batch_X = X[:, batched_examples: m]
-            mini_batch_Y = Y[:, batched_examples: m]
-            mini_batch = (mini_batch_X, mini_batch_Y)
-            mini_batches_list.append(mini_batch)
-        
+        mini_batches_list = create_rand_mini_batches(X_train, Y_train, mini_batch_size, seed = seed)
+
         for mini_batch in mini_batches_list: # looping over mini-batches.
             X, Y = mini_batch # unpack first mini-batch into X and Y.
             A['A0'] = X # to intialize the forward pass.
@@ -420,7 +399,7 @@ def deep_nn_model(X, Y, X_test, Y_test, mini_batch_size = 128, layer_structure =
 #                 P['b' + str(l)] -= alpha * dP['db' + str(l)] # update bs. Uncomment to discard the use of Adam Optimizer.
                 
             adam_counter += 1 # used with the values of V & S to correct them and produce Vc & Sc.
-            
+                
         if print_cost and i % print_every == 0: # to print the cost and training accuracy if set to Ture, every number of iterations based on 'print_every' argument.
             print('Iteration {} : Cost: {}, Train Acc.: {}%'.format(i, cost.round(6), train_acc.round(4))) # round the cost and accuracy and print them.
             
@@ -521,7 +500,7 @@ def random_image_check(num_images, set_x, set_y):
     Given set_x and its labels set_y, outputed by 'merge_shuffle_split' function, and a number for images to be checked, the function displays each with its label
     to be examined.
     '''
-    num_images = 5 # number of images to check.
+#     num_images = 5 # number of images to check.
     plt.figure(figsize = (15, 15)) # setting the size of the figure to dispaly the images.
     i = 1
     plt.subplot(10, num_images, i)
@@ -587,27 +566,184 @@ def deep_nn_model_exp(train_set_x, train_set_y, test_set_x, test_set_y, mini_bat
     return models_list
 # 17 ________________________________________________________________________________________________________________________________________________________________
 
+def one_hot_array(labels_array):
+    classes = [j for i in labels_array for j in i]
+    num_classes = len(set(classes))
+
+    one_hot_array = np.zeros((num_classes, labels_array.shape[1]))
+
+    for i, j in enumerate(classes):
+        one_hot_array[int(j), int(i)] = 1
+    print('One-hot array shape', one_hot_array.shape)
+
+    return one_hot_array
 
 # 18 ________________________________________________________________________________________________________________________________________________________________
 
+def create_rand_mini_batches(X_train, Y_train, mini_batch_size, seed):
+    X = X_train
+    Y = Y_train
+    ## Mini-Batches:
+    m = Y.shape[1] # number of traning examples.
+    num_classes = Y.shape[0]
+
+    indices = np.arange(m) # creating indices to shuffle X and Y for mini-batch creation.
+    seed += 1 # to update the seed in order to get a different shuffle each iteration.
+    np.random.shuffle(indices)
+    X = X[:, indices] # shuffling X.
+    Y = Y[:, indices].reshape((num_classes, m)) # shuffling Y, reshaping added to make sure Y shape is maintained.
+
+    num_full_mini_batches = int(m / mini_batch_size) # number of full (of size mini_batch_size) mini mini-batches.
+    left_over_exampels = ((m / mini_batch_size) - num_full_mini_batches) * mini_batch_size # number of examples in the last mini-batch (less than mini_batch_size).
+    mini_batches_list = list() # list to keep mini-batches for use in the training.
+
+    for i in range(num_full_mini_batches): # creating the full mini-batches.
+        mini_batch_X = X[:, i * mini_batch_size: (1 + i) * mini_batch_size]
+        mini_batch_Y = Y[:, i * mini_batch_size: (1 + i) * mini_batch_size]
+        mini_batch = (mini_batch_X, mini_batch_Y)
+        mini_batches_list.append(mini_batch)
+
+    if m % mini_batch_size != 0: # creating the last mini-batch, if any.
+        batched_examples = int(m - left_over_exampels)
+        mini_batch_X = X[:, batched_examples: m]
+        mini_batch_Y = Y[:, batched_examples: m]
+        mini_batch = (mini_batch_X, mini_batch_Y)
+        mini_batches_list.append(mini_batch)
+        
+    return mini_batches_list
 
 # 19 ________________________________________________________________________________________________________________________________________________________________
 
+# Place holders for the data, X and Y
+def create_data_holders(n_x, n_y):
+    X = tf.placeholder(dtype = tf.float64, shape = (n_x, None), name = 'X')
+    Y = tf.placeholder(dtype = tf.float64, shape = (n_y, None), name = 'Y')
+    return X, Y
 
 # 20 ________________________________________________________________________________________________________________________________________________________________
 
+def initialize_parameters_tf(model_structure, seed):
+    P = dict()
+    for l in range(1, len(model_structure)):
+        P['W' + str(l)] = tf.get_variable(name = 'W' + str(l), dtype = tf.float64, shape = [model_structure[l], model_structure[l - 1]],
+                                          initializer = tf.contrib.layers.xavier_initializer(seed = seed))
+        P['b' + str(l)] = tf.get_variable(name = 'b' + str(l), dtype = tf.float64, shape = [model_structure[l], 1], initializer = tf.zeros_initializer())
+    return P
 
 # 21 ________________________________________________________________________________________________________________________________________________________________
 
+def forward_propagation_tf(X, P, model_structure):
+    Z = dict()
+    A = dict()
+    A['A0'] = X
+    for l in range(1, len(model_structure)):
+        Z['Z' + str(l)] = tf.add(tf.matmul(P['W' + str(l)], A['A' + str(l - 1)]), P['b' + str(l)])
+        if l < len(model_structure) - 1:
+            A['A' + str(l)] = tf.nn.relu(Z['Z' + str(l)])
+    return Z['Z' + str(l)]
 
 # 22 ________________________________________________________________________________________________________________________________________________________________
 
+def calculate_cost_tf(Z, Y, P, model_structure, lambd = 0.0):
+    logits = tf.transpose(Z)
+    labels = tf.transpose(Y)
+    regularizers = 0
+    for l in range(1, len(model_structure)):
+        regularizers += tf.nn.l2_loss(P['W' + str(l)])
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels = labels, logits = logits) + lambd * regularizers)
+    return cost
 
 # 23 ________________________________________________________________________________________________________________________________________________________________
 
+def deep_nn_model_tf(X_train, Y_train, X_test, Y_test, layers_structure = [5, 3, 3], num_epochs = 10, alpha = 0.0001, mini_batch_size = 32, lambd = 0.0,
+                     print_cost = True, print_every = 10, seed = 0):
+    (n_x, m) = X_train.shape
+    n_y = Y_train.shape[0]
+    model_structure = layers_structure.copy()
+    model_structure.insert(0, X_train.shape[0])
+    model_structure.append(Y_train.shape[0])
+    costs = list()
+    
+    ops.reset_default_graph()
+#     tf.reset_default_graph()
+    
+    X, Y = create_data_holders(n_x, n_y)
+    P = initialize_parameters_tf(model_structure, seed)
+    Z = forward_propagation_tf(X, P, model_structure)
+    cost = calculate_cost_tf(Z, Y, P, model_structure, lambd)
+    optimaizer = tf.train.AdamOptimizer(learning_rate = alpha).minimize(cost)
+    
+    init = tf.global_variables_initializer()
+    with tf.Session() as sess:
+        sess.run(init)
+        for epoch in range(num_epochs):
+            epoch_cost = 0.0
+            seed += 1
+            mini_batches_list = create_rand_mini_batches(X_train, Y_train, mini_batch_size, seed)
+            
+            for mini_batch in mini_batches_list:
+                (mini_batch_X, mini_batch_Y) = mini_batch
+                _ , mini_batch_cost = sess.run([optimaizer, cost], feed_dict = {X: mini_batch_X, Y: mini_batch_Y})
+                epoch_cost += mini_batch_cost / mini_batch_size
+                costs.append(epoch_cost)
+            if print_cost and epoch % print_every == 0:
+                print('Cost after epoch {}: {}'.format(epoch, epoch_cost.round(5)))
+        
+        P = sess.run(P)
+        
+        correct_prediction = tf.equal(tf.argmax(Z), tf.argmax(Y))
+
+        # Calculate accuracy on the test set
+        accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+        train_accuracy = accuracy.eval({X: X_train, Y: Y_train}) * 100
+        test_accuracy = accuracy.eval({X: X_test, Y: Y_test}) * 100
+        
+        print ('Train Accuracy: {}%'.format(round(train_accuracy, 5)))
+        print ('Test Accuracy: {}%'.format(round(test_accuracy, 5)))
+        
+        sub_costs = [costs[i] for i in range(len(costs)) if i % len(mini_batches_list) == 0]
+        plt.plot(np.squeeze(sub_costs))
+        plt.ylabel('cost')
+        plt.xlabel('iterations')
+        plt.title('model struc.: ' + str(model_structure) + '.' + ' alpha = ' + str(alpha))
+        plt.show()
+        return P
 
 # 24 ________________________________________________________________________________________________________________________________________________________________
 
+def deep_nn_model_tf_predict(sample_path = None, resize = 100, par = None):
+    pics_array = prepare_image_data(sample_path, resize)[0]
+    set_x_flatten_stdr = prepare_image_arrays(pics_array)
+    
+    L = len(par) // 2
+    for l in range(1, L + 1):
+        par['W' + str(l)] = tf.convert_to_tensor(par['W' + str(l)])
+        par['b' + str(l)] = tf.convert_to_tensor(par['b' + str(l)])
+    
+    X = tf.placeholder(dtype = tf.float64, shape = [set_x_flatten_stdr.shape[0], set_x_flatten_stdr.shape[1]])
+    model_structure = range(L + 1)
+    Z = forward_propagation_tf(X, par, model_structure)
+    
+    p = tf.argmax(Z)
+    
+    sess = tf.Session()
+    prediction = sess.run(p, feed_dict = {X: set_x_flatten_stdr})
+    
+    plt.figure(figsize = (15, 12))
+    i = 1
+    num_pics = len(listdir(sample_path))
+    plt.subplot(num_pics, 6, i)
+    for j in range(num_pics):
+        pic = Image.open(sample_path + listdir(sample_path)[j])
+        plt.subplot(5, 6, i + j)
+        if prediction[j] == 1:
+            plt.title('Dog', c = 'r')
+        else:
+            plt.title('Monument', c = 'r')
+        plt.tick_params(axis='both', which='both', labelleft = False, labelbottom = False)
+        plt.imshow(pic)
+        
+    return prediction
 
 # 25 ________________________________________________________________________________________________________________________________________________________________
 
@@ -616,3 +752,12 @@ def deep_nn_model_exp(train_set_x, train_set_y, test_set_x, test_set_y, mini_bat
 
 
 # 27 ________________________________________________________________________________________________________________________________________________________________
+
+
+# 28 ________________________________________________________________________________________________________________________________________________________________
+
+
+# 29 ________________________________________________________________________________________________________________________________________________________________
+
+
+# 30 ________________________________________________________________________________________________________________________________________________________________
