@@ -8,3 +8,4 @@ A Deep learning tool kit with a Neural Network model implementation, in addition
 * **os**
 * **pandas**
 * **datetime**
+* **tensorflow**
